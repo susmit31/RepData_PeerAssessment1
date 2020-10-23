@@ -7,19 +7,139 @@ output:
 
 
 ## Loading and preprocessing the data
+First we load up the data into R, after making sure it is in the working directory.
+```{r}
+activity<-read.csv('activity.csv',header=T,sep=',')
+```
+First up, let's check if everything is in the correct format. (In what follows, we will be using the packages *dplyr* and *ggplot2* extensively, so zeroth up, let's load 'em up.)
+```{r}
+library(dplyr); library(ggplot2)
 
-
+activity%>%head()
+```
+The steps column seems to be a bit alarming. Let's see if everything has been messed up or if it's just the head.
+```{r}
+mean(is.na(activity$steps))
+```
+So about 13% of the steps column is missing. In terms of absolute numbers,
+```{r}
+sum(is.na(activity$steps))
+```
+about 2300 missing datapoints, and this implies that in total there are about 2300/.13 \approx 17,000 datapoints. Relieved with the fact that missing values haven't created a global pandemic and can be dealt with later, we move on to the next step, which is converting the date column into the standard dates format, to facilitate downstream analyses.
+```{r}
+activity$date<-as.Date(activity$date,"%Y-%m-%d")
+class(activity$date)
+```
 
 ## What is mean total number of steps taken per day?
-
-
+At this point, we start exploring the data. Let's see how the total number of steps changes across the days.
+```{r}
+steps_by_day<-activity%>%group_by(date)%>%summarise(total_steps=sum(steps,na.rm=T))
+head(steps_by_day)
+```
+Now we plot this and see some summary statistics.
+```{r}
+ggplot(data=steps_by_day,aes(x=total_steps))+geom_histogram(bins=20,col='black',fill='tomato')+labs(x='Total steps')
+```
+The nature of the distribution isn't entirely clear from the plot, so we can't immediately comment about how the mean and median will compare. Let's see the summary stats.
+```{r}
+summary(steps_by_day$total_steps)
+```
+So the median step count per day is 10,395, and the mean is 9,354.
 
 ## What is the average daily activity pattern?
-
-
+Now we're asked to find out the number of steps taken at particular 5-minute intervals, averaged across all days. We proceed as before.
+```{r}
+steps_by_time<-activity%>%group_by(interval)%>%summarise(mean_steps=mean(steps,na.rm=T))
+steps_by_time
+```
+Let's visualise this with a line plot.
+```{r}
+ggplot(data=steps_by_time,aes(x=interval,y=mean_steps))+geom_line(col='orange')+labs(x="Time intervals",y="Mean steps")
+```
+From the plot, it looks like the mean number of steps peaks at around 8:00 AM. Let's check if it is indeed the case. 
+```{r}
+steps_by_time%>%filter(mean_steps==max(mean_steps))
+```
+So the mean steps peaks at the interval labelled 835.
 
 ## Imputing missing values
+First, we check how many entries (i.e. rows) in the dataset has any missing value.
+```{r}
+sum(apply(is.na(activity),1,any))
+```
+The number of rows with missing data, 2304, exactly equals the number of missing values in the steps column that we calculated at the very beginning. This shouldn't be a surprise, since this is the only column which has a measured value, given that the other two columns have date and time labels. Before proceeding with the imputation, we have to see how the missing values in the steps column are distributed with respect to the other two columns.
+```{r}
+#Checking missing value distribution across all days
+missing_by_day<-activity%>%group_by(date)%>%summarise(total_missing=sum(is.na(steps)))
+missing_by_day
+```
+It seems like a date either is completely filled with missing values, or it has none of them. Let's see if this is the case.
+```{r}
+missing_by_day%>%select(total_missing)%>%unique()
+```
+Since each day has 24*60/5=288 five-minute intervals, we see that each date either has no missing values, or it has no non-missing values. This means that whatever imputation technique we use, we cannot use the date for imputation, as all values across the same date will be missing. Let's check out the case for intervals.
+```{r}
+missing_by_time<-activity%>%group_by(interval)%>%summarise(total_missing=sum(is.na(steps)))
+missing_by_time
+```
+As opposed to the imperialistic distribution of missing values across dates, we see a quite socialist distribution of NA's across time labels. One final step of verification:
+```{r}
+missing_by_time%>%select(total_missing)%>%unique()
+```
+So every interval has exactly 8 missing values. This, coupled with the fact that missing values have an all-or-nothing relationship with dates, implies that all the missing data are confined within 8 dates. Now let's talk imputation. The most straightforward strategy would be to take the mean value for each label, and replace NA's for that label with that mean. Let's do that now.
+```{r}
+mean_by_time<-activity%>%group_by(interval)%>%summarise(mean_steps=mean(steps,na.rm=T))
+mean_by_time%>%head(3)
+```
+```{r}
+imputedData<-c()
+for(i in 1:dim(activity)[1]){
+    row_i<-activity[i,]
+    imputedData<-rbind(imputedData,row_i)
+    if(is.na(row_i$steps)){
+        intvl<-row_i$interval
+        mean_for_intvl<-mean_by_time%>%filter(interval==intvl)
+        imputedData[i,]$steps<-mean_for_intvl$mean_steps
+    }
+}
+head(imputedData)
 
+```
+Just to be sure, let's see if we've made any errors anywhere.
+```{r}
+apply(is.na(imputedData),2,sum)
+```
+Cool. Now we're ready to plot this imputed dataset and summarise it.
+```{r}
+tByDay_imputed<-imputedData%>%group_by(date)%>%summarise(total_steps=sum(steps))
+ggplot(data=tByDay_imputed,aes(x=total_steps))+geom_histogram(bins=17,col='black',fill='red')+labs(x='Total steps (imputed)',y='Count')
+```
+The distribution looks roughly symmetric now, with possibly a slight left-skew.
+```{r}
+tByDay_imputed%>%select(total_steps)%>%summary()
+```
+Before imputation, the median was 10395, while the mean was 9354. Both have increased, albeit probably not significantly. Let's quantify it in terms of percentages.
+```{r}
+dMedian_perc<-(10766-10395)/10395
+dMean_perc<-(10766-9354)/9354
+perc_changes<-c(median=dMedian_perc,mean=dMean_perc)
+perc_changes
+```
+So the mean total daily steps has soared by a whopping 15%, while the median has remained relatively stable, changing by less than 4%.
 
 
 ## Are there differences in activity patterns between weekdays and weekends?
+We start by adding an indicator variable for distinguishing between weekdays and weekends.
+```{r}
+imputedData$days<-weekdays(imputedData$date)
+imputedData$days<-with(imputedData,ifelse(days=="Saturday"|days=="Sunday","Weekend","Weekday"))
+table(imputedData$days)
+```
+```{r}
+mean_tNd<-imputedData%>%group_by(interval,days)%>%summarise(mean_steps=mean(steps))
+ggplot(data=mean_tNd,aes(x=interval,y=mean_steps))+geom_line(col='tomato')+facet_grid(days~.)+labs(x='Interval',y='Mean steps')
+```
+The plot shows this person, on average, walks more in the morning from 8-9 AM on weekdays, and during weekends, he walks more from around 10 AM.
+
+
